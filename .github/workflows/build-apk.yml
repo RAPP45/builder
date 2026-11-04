@@ -573,18 +573,18 @@ jobs:
             --target-platform android-arm,android-arm64,android-x64
           echo "APK Debug selesai"
 
-      # ✅ FIX #2: Build via ./gradlew (bypass Flutter CLI error)
+      # ✅ FIX #2: flutter build apk TANPA --obfuscate (penyebab error path)
       - name: Build APK Release
         if: steps.build_info.outputs.build_type == 'apk-release'
-        working-directory: android
         run: |
-          echo "=== Build via Gradle langsung (bypass Flutter CLI) ==="
-          chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          echo "=== Build via flutter CLI (tanpa obfuscate) ==="
+          flutter build apk --release \
+            --target-platform android-arm,android-arm64
           
           echo ""
-          echo "=== Cek hasil build ==="
-          find app/build/outputs -name "*.apk" -type f
+          echo "=== Cari APK di semua lokasi ==="
+          find . -name "app-release.apk" -type f 2>/dev/null
+          find . -name "*.apk" -type f 2>/dev/null | grep -v "debug"
 
       - name: Build AAB Release
         if: steps.build_info.outputs.build_type == 'aab-release'
@@ -593,7 +593,42 @@ jobs:
             --target-platform android-arm,android-arm64
           echo "AAB Release selesai"
 
-      # ✅ FIX #3: Path copy APK (langsung ke lokasi Gradle output)
+      # ✅ FIX #3: Copy APK ke lokasi yang Flutter CLI cari (fix error "Couldn't find APK")
+      - name: Fix APK Location
+        if: steps.build_info.outputs.build_type == 'apk-release'
+        run: |
+          echo "=== Copy APK ke lokasi yang Flutter CLI cari ==="
+          mkdir -p build/app/outputs/flutter-apk
+          
+          APK_FOUND=""
+          for path in \
+            "android/app/build/outputs/flutter-apk/app-release.apk" \
+            "android/app/build/outputs/apk/release/app-release.apk" \
+            "build/app/outputs/flutter-apk/app-release.apk" \
+            "build/app/outputs/apk/release/app-release.apk"; do
+            if [ -f "$path" ]; then
+              APK_FOUND="$path"
+              echo "✅ APK ditemukan: $path"
+              break
+            fi
+          done
+          
+          if [ -z "$APK_FOUND" ]; then
+            echo "❌ APK tidak ditemukan di lokasi manapun!"
+            echo "=== Semua APK di project ==="
+            find . -name "*.apk" -type f 2>/dev/null
+            exit 1
+          fi
+          
+          cp "$APK_FOUND" build/app/outputs/flutter-apk/app-release.apk
+          echo "✅ APK copied ke build/app/outputs/flutter-apk/app-release.apk"
+          
+          echo ""
+          echo "=== Verifikasi ==="
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+          ls -lh "$APK_FOUND"
+
+      # ✅ FIX #4: Path copy APK fallback (cari di 3 lokasi)
       - name: Prepare Output Files
         run: |
           mkdir -p output
@@ -605,15 +640,15 @@ jobs:
           find . -name "*.apk" -type f 2>/dev/null | grep -v "/output/" || echo "Tidak ada APK"
 
           if [ "$BUILD_TYPE" = "apk-debug" ]; then
-            APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" | head -1)
+            APK_PATH=$(find android/app/build/outputs/flutter-apk -name "*.apk" | head -1)
             if [ -z "$APK_PATH" ]; then
               APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" | head -1)
             fi
             cp "$APK_PATH" "output/${APP_NAME}_debug_${TIMESTAMP}.apk"
           elif [ "$BUILD_TYPE" = "apk-release" ]; then
-            APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+            APK_PATH=$(find android/app/build/outputs/flutter-apk -name "app-release.apk" | head -1)
             if [ -z "$APK_PATH" ]; then
-              APK_PATH=$(find android/app/build/outputs/flutter-apk -name "app-release.apk" | head -1)
+              APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
             fi
             if [ -z "$APK_PATH" ]; then
               APK_PATH=$(find build/app/outputs/flutter-apk -name "app-release.apk" | head -1)
