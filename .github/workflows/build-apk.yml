@@ -388,10 +388,12 @@ jobs:
           echo "--- android/build.gradle ---"
           cat "$BUILD_GRADLE" 2>/dev/null || echo "(not found)"
 
-      # PERBAIKAN: Fix minSdkVersion & overrideLibrary
+      # ============================================
+      # ✅ FIX #1: minSdk = 24 (audio_session butuh 24)
+      # ============================================
       - name: 🔧 Fix minSdkVersion & AndroidManifest
         run: |
-          echo "=== Fixing all gradle files ==="
+          echo "=== Fixing all gradle files (minSdk to 24) ==="
           
           find android -name "build.gradle" -o -name "build.gradle.kts" | while read f; do
             echo "Processing: $f"
@@ -571,23 +573,27 @@ jobs:
             --target-platform android-arm,android-arm64,android-x64
           echo "APK Debug selesai"
 
-      # ✅ FIX #1: Hapus --obfuscate & --split-debug-info yang bikin path APK salah
+      # ✅ FIX #2: Build via ./gradlew (bypass Flutter CLI error)
       - name: Build APK Release
         if: steps.build_info.outputs.build_type == 'apk-release'
+        working-directory: android
         run: |
-          flutter build apk --release \
-            --target-platform android-arm,android-arm64
-          echo "APK Release selesai"
+          echo "=== Build via Gradle langsung (bypass Flutter CLI) ==="
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          
+          echo ""
+          echo "=== Cek hasil build ==="
+          find app/build/outputs -name "*.apk" -type f
 
       - name: Build AAB Release
         if: steps.build_info.outputs.build_type == 'aab-release'
         run: |
           flutter build appbundle --release \
-            --obfuscate \
-            --split-debug-info=build/debug-info
+            --target-platform android-arm,android-arm64
           echo "AAB Release selesai"
 
-      # ✅ FIX #2: Path copy APK diubah dari 'build/...' ke 'android/app/build/...'
+      # ✅ FIX #3: Path copy APK (langsung ke lokasi Gradle output)
       - name: Prepare Output Files
         run: |
           mkdir -p output
@@ -595,17 +601,31 @@ jobs:
           TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
           APP_NAME=$(grep '^name:' pubspec.yaml | awk '{print $2}' | tr -d '\r')
 
+          echo "=== Cari APK di semua lokasi ==="
+          find . -name "*.apk" -type f 2>/dev/null | grep -v "/output/" || echo "Tidak ada APK"
+
           if [ "$BUILD_TYPE" = "apk-debug" ]; then
-            APK_PATH=$(find android/app/build/outputs/flutter-apk -name "*.apk" | head -1)
+            APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" | head -1)
+            if [ -z "$APK_PATH" ]; then
+              APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" | head -1)
+            fi
             cp "$APK_PATH" "output/${APP_NAME}_debug_${TIMESTAMP}.apk"
           elif [ "$BUILD_TYPE" = "apk-release" ]; then
-            APK_PATH=$(find android/app/build/outputs/flutter-apk -name "app-release.apk" | head -1)
+            APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+            if [ -z "$APK_PATH" ]; then
+              APK_PATH=$(find android/app/build/outputs/flutter-apk -name "app-release.apk" | head -1)
+            fi
+            if [ -z "$APK_PATH" ]; then
+              APK_PATH=$(find build/app/outputs/flutter-apk -name "app-release.apk" | head -1)
+            fi
+            echo "APK yang akan di-copy: $APK_PATH"
             cp "$APK_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.apk"
           elif [ "$BUILD_TYPE" = "aab-release" ]; then
             AAB_PATH=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -1)
             cp "$AAB_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.aab"
           fi
 
+          echo ""
           echo "Output files:"
           ls -lh output/
 
