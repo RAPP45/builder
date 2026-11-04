@@ -565,6 +565,21 @@ jobs:
           dart --disable-analytics
           flutter pub get
 
+      # ✅ FIX UTAMA: Symlink build/ → android/app/build/
+      # Ini fix bug Flutter CLI yang cari APK di build/ padahal Gradle generate di android/app/build/
+      - name: 🔗 Symlink build/ ke android/app/build/
+        run: |
+          echo "=== Create symlink (fix Flutter CLI bug) ==="
+          rm -rf build || true
+          mkdir -p android/app/build
+          ln -sfn "$(pwd)/android/app/build" build
+          echo "✅ Symlink created:"
+          ls -la build/
+          echo ""
+          echo "=== Verify symlink ==="
+          readlink -f build/
+          echo "Target should be: $(pwd)/android/app/build"
+
       - name: Build APK Debug
         if: steps.build_info.outputs.build_type == 'apk-debug'
         run: |
@@ -573,18 +588,18 @@ jobs:
             --target-platform android-arm,android-arm64,android-x64
           echo "APK Debug selesai"
 
-      # ✅ FIX #2: flutter build apk TANPA --obfuscate (penyebab error path)
+      # ✅ FIX: Build dengan symlink aktif, tanpa --obfuscate
       - name: Build APK Release
         if: steps.build_info.outputs.build_type == 'apk-release'
         run: |
-          echo "=== Build via flutter CLI (tanpa obfuscate) ==="
+          echo "=== Build via flutter CLI (with symlink) ==="
           flutter build apk --release \
             --target-platform android-arm,android-arm64
           
           echo ""
-          echo "=== Cari APK di semua lokasi ==="
-          find . -name "app-release.apk" -type f 2>/dev/null
-          find . -name "*.apk" -type f 2>/dev/null | grep -v "debug"
+          echo "=== Cek APK ==="
+          ls -lh build/app/outputs/flutter-apk/app-release.apk 2>/dev/null || echo "Tidak ada di build/"
+          ls -lh android/app/build/outputs/flutter-apk/app-release.apk 2>/dev/null || echo "Tidak ada di android/"
 
       - name: Build AAB Release
         if: steps.build_info.outputs.build_type == 'aab-release'
@@ -593,42 +608,6 @@ jobs:
             --target-platform android-arm,android-arm64
           echo "AAB Release selesai"
 
-      # ✅ FIX #3: Copy APK ke lokasi yang Flutter CLI cari (fix error "Couldn't find APK")
-      - name: Fix APK Location
-        if: steps.build_info.outputs.build_type == 'apk-release'
-        run: |
-          echo "=== Copy APK ke lokasi yang Flutter CLI cari ==="
-          mkdir -p build/app/outputs/flutter-apk
-          
-          APK_FOUND=""
-          for path in \
-            "android/app/build/outputs/flutter-apk/app-release.apk" \
-            "android/app/build/outputs/apk/release/app-release.apk" \
-            "build/app/outputs/flutter-apk/app-release.apk" \
-            "build/app/outputs/apk/release/app-release.apk"; do
-            if [ -f "$path" ]; then
-              APK_FOUND="$path"
-              echo "✅ APK ditemukan: $path"
-              break
-            fi
-          done
-          
-          if [ -z "$APK_FOUND" ]; then
-            echo "❌ APK tidak ditemukan di lokasi manapun!"
-            echo "=== Semua APK di project ==="
-            find . -name "*.apk" -type f 2>/dev/null
-            exit 1
-          fi
-          
-          cp "$APK_FOUND" build/app/outputs/flutter-apk/app-release.apk
-          echo "✅ APK copied ke build/app/outputs/flutter-apk/app-release.apk"
-          
-          echo ""
-          echo "=== Verifikasi ==="
-          ls -lh build/app/outputs/flutter-apk/app-release.apk
-          ls -lh "$APK_FOUND"
-
-      # ✅ FIX #4: Path copy APK fallback (cari di 3 lokasi)
       - name: Prepare Output Files
         run: |
           mkdir -p output
