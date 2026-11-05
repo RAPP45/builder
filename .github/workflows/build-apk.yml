@@ -566,8 +566,7 @@ jobs:
           flutter pub get
 
       # ============================================
-      # ✅ FIX UTAMA: Download gradlew dari Gradle GitHub
-      # Template gradlew tidak ada di Flutter 3.32.8
+      # ✅ FIX UTAMA #1: Download gradlew + paksa gradle-wrapper.properties ke 8.11.1
       # ============================================
       - name: 🔧 Create gradlew wrapper
         run: |
@@ -580,47 +579,60 @@ jobs:
           else
             echo "📦 Download gradlew dari Gradle GitHub (v8.11.1)..."
             
-            # Download gradlew
             if ! curl -fL -o gradlew "https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradlew"; then
               echo "❌ Gagal download gradlew!"
               exit 1
             fi
             chmod +x gradlew
             
-            # Download gradlew.bat
             curl -fL -o gradlew.bat "https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradlew.bat" 2>/dev/null || true
             
-            # Download gradle-wrapper.jar
             mkdir -p gradle/wrapper
             if ! curl -fL -o gradle/wrapper/gradle-wrapper.jar "https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradle/wrapper/gradle-wrapper.jar"; then
               echo "❌ Gagal download gradle-wrapper.jar!"
               exit 1
             fi
             
-            # Download gradle-wrapper.properties
-            curl -fL -o gradle/wrapper/gradle-wrapper.properties "https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradle/wrapper/gradle-wrapper.properties" 2>/dev/null || true
-            
-            # Kalau properties tidak ada, buat manual
-            if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-              cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-all.zip
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-            fi
-            
             echo "✅ gradlew downloaded dari Gradle GitHub"
           fi
+          
+          # ✅ FIX KRITIS: Paksa gradle-wrapper.properties ke 8.11.1
+          # File default dari Gradle GitHub tag v8.11.1 masih mengarah ke 8.11 (bug di repo Gradle)
+          echo ""
+          echo "=== Paksa gradle-wrapper.properties ke 8.11.1 ==="
+          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-all.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+EOF
+          
+          echo "✅ gradle-wrapper.properties dipaksa ke 8.11.1-all.zip"
+          echo ""
+          echo "=== Isi gradle-wrapper.properties ==="
+          cat gradle/wrapper/gradle-wrapper.properties
           
           echo ""
           echo "=== Verifikasi ==="
           ls -la gradlew
-          ls -la gradlew.bat 2>/dev/null || echo "(gradlew.bat tidak ada - OK untuk Linux)"
-          ls -la gradle/wrapper/ 2>/dev/null || echo "(gradle/wrapper tidak ada)"
+          ls -la gradle/wrapper/
           
           cd ..
+
+      # ============================================
+      # ✅ FIX UTAMA #2: Clear Gradle cache 8.11 lama
+      # ============================================
+      - name: 🧹 Clear Gradle 8.11 cache
+        run: |
+          echo "=== Clear Gradle 8.11 cache (hindari pakai versi lama) ==="
+          rm -rf ~/.gradle/caches/8.11 2>/dev/null || true
+          rm -rf ~/.gradle/wrapper/dists/gradle-8.11-bin 2>/dev/null || true
+          rm -rf ~/.gradle/wrapper/dists/gradle-8.11-all 2>/dev/null || true
+          echo "✅ Gradle 8.11 cache cleared"
+          echo ""
+          echo "=== Cek cache yang ada ==="
+          ls ~/.gradle/wrapper/dists/ 2>/dev/null || echo "(belum ada cache)"
 
       - name: Build APK Debug
         if: steps.build_info.outputs.build_type == 'apk-debug'
@@ -631,7 +643,7 @@ jobs:
           echo "APK Debug selesai"
 
       # ============================================
-      # ✅ FIX: Build via ./gradlew (BYPASS flutter CLI)
+      # ✅ FIX UTAMA #3: Build via ./gradlew (BYPASS flutter CLI)
       # ============================================
       - name: Build APK Release
         if: steps.build_info.outputs.build_type == 'apk-release'
@@ -688,23 +700,19 @@ jobs:
             echo "APK yang akan di-copy: $APK_PATH"
             cp "$APK_PATH" "output/${APP_NAME}_debug_${TIMESTAMP}.apk"
           elif [ "$BUILD_TYPE" = "apk-release" ]; then
-            # Prioritas 1: apk/release/ (dari ./gradlew)
             APK_PATH=$(find android/app/build/outputs/apk/release -name "app-release.apk" 2>/dev/null | head -1)
             echo "Cek 1 (apk/release/): $APK_PATH"
             
-            # Prioritas 2: flutter-apk/ (dari flutter build apk)
             if [ -z "$APK_PATH" ]; then
               APK_PATH=$(find android/app/build/outputs/flutter-apk -name "app-release.apk" 2>/dev/null | head -1)
               echo "Cek 2 (flutter-apk/): $APK_PATH"
             fi
             
-            # Prioritas 3: cari di mana saja di outputs/
             if [ -z "$APK_PATH" ]; then
               APK_PATH=$(find android/app/build/outputs -name "*.apk" 2>/dev/null | head -1)
               echo "Cek 3 (semua di outputs/): $APK_PATH"
             fi
             
-            # Prioritas 4: seluruh project
             if [ -z "$APK_PATH" ]; then
               APK_PATH=$(find . -name "*.apk" -not -path "*/output/*" 2>/dev/null | head -1)
               echo "Cek 4 (seluruh project): $APK_PATH"
@@ -733,7 +741,6 @@ jobs:
           echo "Output files:"
           ls -lh output/
 
-          # Final check
           if [ -z "$(ls -A output/ 2>/dev/null)" ]; then
             echo "❌ Output folder kosong!"
             exit 1
