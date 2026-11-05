@@ -566,44 +566,60 @@ jobs:
           flutter pub get
 
       # ============================================
-      # ✅ FIX UTAMA: Buat gradlew wrapper
-      # Bypass flutter build apk yang bug (cari APK di path salah)
+      # ✅ FIX UTAMA: Download gradlew dari Gradle GitHub
+      # Template gradlew tidak ada di Flutter 3.32.8
       # ============================================
       - name: 🔧 Create gradlew wrapper
         run: |
           echo "=== Create gradlew wrapper ==="
           cd android
           
-          FLUTTER_ROOT=$(dirname $(dirname $(which flutter)))
-          TEMPLATE_DIR="$FLUTTER_ROOT/packages/flutter_tools/templates/app/android.tmpl"
-          
-          echo "Flutter root: $FLUTTER_ROOT"
-          echo "Template dir: $TEMPLATE_DIR"
-          
           if [ -f "gradlew" ]; then
             echo "✅ gradlew sudah ada"
             chmod +x gradlew
-          elif [ -d "$TEMPLATE_DIR" ]; then
-            echo "📦 Copy gradlew dari Flutter SDK template..."
-            cp "$TEMPLATE_DIR/gradlew" .
-            cp "$TEMPLATE_DIR/gradlew.bat" . 2>/dev/null || true
-            mkdir -p gradle/wrapper
-            cp -r "$TEMPLATE_DIR/gradle/wrapper/"* gradle/wrapper/ 2>/dev/null || true
-            chmod +x gradlew
-            echo "✅ gradlew copied dari template"
           else
-            echo "⚠️ Template tidak ditemukan, coba buat manual..."
-            if command -v gradle >/dev/null 2>&1; then
-              gradle wrapper --gradle-version 8.11.1
-              chmod +x gradlew
-              echo "✅ gradlew dibuat via gradle wrapper"
-            else
-              echo "❌ Tidak bisa buat gradlew!"
+            echo "📦 Download gradlew dari Gradle GitHub (v8.11.1)..."
+            
+            # Download gradlew
+            if ! curl -fL -o gradlew "https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradlew"; then
+              echo "❌ Gagal download gradlew!"
               exit 1
             fi
+            chmod +x gradlew
+            
+            # Download gradlew.bat
+            curl -fL -o gradlew.bat "https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradlew.bat" 2>/dev/null || true
+            
+            # Download gradle-wrapper.jar
+            mkdir -p gradle/wrapper
+            if ! curl -fL -o gradle/wrapper/gradle-wrapper.jar "https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradle/wrapper/gradle-wrapper.jar"; then
+              echo "❌ Gagal download gradle-wrapper.jar!"
+              exit 1
+            fi
+            
+            # Download gradle-wrapper.properties
+            curl -fL -o gradle/wrapper/gradle-wrapper.properties "https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradle/wrapper/gradle-wrapper.properties" 2>/dev/null || true
+            
+            # Kalau properties tidak ada, buat manual
+            if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+              cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-all.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+            fi
+            
+            echo "✅ gradlew downloaded dari Gradle GitHub"
           fi
           
+          echo ""
+          echo "=== Verifikasi ==="
           ls -la gradlew
+          ls -la gradlew.bat 2>/dev/null || echo "(gradlew.bat tidak ada - OK untuk Linux)"
+          ls -la gradle/wrapper/ 2>/dev/null || echo "(gradle/wrapper tidak ada)"
+          
           cd ..
 
       - name: Build APK Debug
@@ -616,7 +632,6 @@ jobs:
 
       # ============================================
       # ✅ FIX: Build via ./gradlew (BYPASS flutter CLI)
-      # Flutter CLI bug: cari APK di build/ padahal Gradle generate di android/app/build/
       # ============================================
       - name: Build APK Release
         if: steps.build_info.outputs.build_type == 'apk-release'
@@ -661,32 +676,69 @@ jobs:
           find . -name "*.aab" -type f 2>/dev/null | grep -v "/output/" || echo "Tidak ada AAB"
 
           if [ "$BUILD_TYPE" = "apk-debug" ]; then
-            APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" | head -1)
+            APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" 2>/dev/null | head -1)
             if [ -z "$APK_PATH" ]; then
-              APK_PATH=$(find android/app/build/outputs/flutter-apk -name "*.apk" | head -1)
+              APK_PATH=$(find android/app/build/outputs/flutter-apk -name "*.apk" 2>/dev/null | head -1)
+            fi
+            if [ -z "$APK_PATH" ]; then
+              echo "❌ Debug APK tidak ditemukan!"
+              find . -name "*.apk" -type f 2>/dev/null
+              exit 1
             fi
             echo "APK yang akan di-copy: $APK_PATH"
             cp "$APK_PATH" "output/${APP_NAME}_debug_${TIMESTAMP}.apk"
           elif [ "$BUILD_TYPE" = "apk-release" ]; then
-            # Prioritas: apk/release/ (dari gradlew), lalu flutter-apk/ (fallback)
-            APK_PATH=$(find android/app/build/outputs/apk/release -name "app-release.apk" | head -1)
+            # Prioritas 1: apk/release/ (dari ./gradlew)
+            APK_PATH=$(find android/app/build/outputs/apk/release -name "app-release.apk" 2>/dev/null | head -1)
+            echo "Cek 1 (apk/release/): $APK_PATH"
+            
+            # Prioritas 2: flutter-apk/ (dari flutter build apk)
             if [ -z "$APK_PATH" ]; then
-              APK_PATH=$(find android/app/build/outputs/flutter-apk -name "app-release.apk" | head -1)
+              APK_PATH=$(find android/app/build/outputs/flutter-apk -name "app-release.apk" 2>/dev/null | head -1)
+              echo "Cek 2 (flutter-apk/): $APK_PATH"
             fi
+            
+            # Prioritas 3: cari di mana saja di outputs/
             if [ -z "$APK_PATH" ]; then
-              APK_PATH=$(find android/app/build/outputs -name "*.apk" | head -1)
+              APK_PATH=$(find android/app/build/outputs -name "*.apk" 2>/dev/null | head -1)
+              echo "Cek 3 (semua di outputs/): $APK_PATH"
             fi
-            echo "APK yang akan di-copy: $APK_PATH"
+            
+            # Prioritas 4: seluruh project
+            if [ -z "$APK_PATH" ]; then
+              APK_PATH=$(find . -name "*.apk" -not -path "*/output/*" 2>/dev/null | head -1)
+              echo "Cek 4 (seluruh project): $APK_PATH"
+            fi
+            
+            if [ -z "$APK_PATH" ]; then
+              echo "❌ APK tidak ditemukan di lokasi manapun!"
+              find . -name "*.apk" -type f 2>/dev/null
+              exit 1
+            fi
+            
+            echo "✅ APK yang akan di-copy: $APK_PATH"
             cp "$APK_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.apk"
           elif [ "$BUILD_TYPE" = "aab-release" ]; then
-            AAB_PATH=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -1)
-            echo "AAB yang akan di-copy: $AAB_PATH"
+            AAB_PATH=$(find android/app/build/outputs/bundle/release -name "*.aab" 2>/dev/null | head -1)
+            if [ -z "$AAB_PATH" ]; then
+              echo "❌ AAB tidak ditemukan!"
+              find . -name "*.aab" -type f 2>/dev/null
+              exit 1
+            fi
+            echo "✅ AAB yang akan di-copy: $AAB_PATH"
             cp "$AAB_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.aab"
           fi
 
           echo ""
           echo "Output files:"
           ls -lh output/
+
+          # Final check
+          if [ -z "$(ls -A output/ 2>/dev/null)" ]; then
+            echo "❌ Output folder kosong!"
+            exit 1
+          fi
+          echo "✅ Output folder berisi file"
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
