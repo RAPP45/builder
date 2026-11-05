@@ -565,20 +565,46 @@ jobs:
           dart --disable-analytics
           flutter pub get
 
-      # ✅ FIX UTAMA: Symlink build/ → android/app/build/
-      # Ini fix bug Flutter CLI yang cari APK di build/ padahal Gradle generate di android/app/build/
-      - name: 🔗 Symlink build/ ke android/app/build/
+      # ============================================
+      # ✅ FIX UTAMA: Buat gradlew wrapper
+      # Bypass flutter build apk yang bug (cari APK di path salah)
+      # ============================================
+      - name: 🔧 Create gradlew wrapper
         run: |
-          echo "=== Create symlink (fix Flutter CLI bug) ==="
-          rm -rf build || true
-          mkdir -p android/app/build
-          ln -sfn "$(pwd)/android/app/build" build
-          echo "✅ Symlink created:"
-          ls -la build/
-          echo ""
-          echo "=== Verify symlink ==="
-          readlink -f build/
-          echo "Target should be: $(pwd)/android/app/build"
+          echo "=== Create gradlew wrapper ==="
+          cd android
+          
+          FLUTTER_ROOT=$(dirname $(dirname $(which flutter)))
+          TEMPLATE_DIR="$FLUTTER_ROOT/packages/flutter_tools/templates/app/android.tmpl"
+          
+          echo "Flutter root: $FLUTTER_ROOT"
+          echo "Template dir: $TEMPLATE_DIR"
+          
+          if [ -f "gradlew" ]; then
+            echo "✅ gradlew sudah ada"
+            chmod +x gradlew
+          elif [ -d "$TEMPLATE_DIR" ]; then
+            echo "📦 Copy gradlew dari Flutter SDK template..."
+            cp "$TEMPLATE_DIR/gradlew" .
+            cp "$TEMPLATE_DIR/gradlew.bat" . 2>/dev/null || true
+            mkdir -p gradle/wrapper
+            cp -r "$TEMPLATE_DIR/gradle/wrapper/"* gradle/wrapper/ 2>/dev/null || true
+            chmod +x gradlew
+            echo "✅ gradlew copied dari template"
+          else
+            echo "⚠️ Template tidak ditemukan, coba buat manual..."
+            if command -v gradle >/dev/null 2>&1; then
+              gradle wrapper --gradle-version 8.11.1
+              chmod +x gradlew
+              echo "✅ gradlew dibuat via gradle wrapper"
+            else
+              echo "❌ Tidak bisa buat gradlew!"
+              exit 1
+            fi
+          fi
+          
+          ls -la gradlew
+          cd ..
 
       - name: Build APK Debug
         if: steps.build_info.outputs.build_type == 'apk-debug'
@@ -588,26 +614,41 @@ jobs:
             --target-platform android-arm,android-arm64,android-x64
           echo "APK Debug selesai"
 
-      # ✅ FIX: Build dengan symlink aktif, tanpa --obfuscate
+      # ============================================
+      # ✅ FIX: Build via ./gradlew (BYPASS flutter CLI)
+      # Flutter CLI bug: cari APK di build/ padahal Gradle generate di android/app/build/
+      # ============================================
       - name: Build APK Release
         if: steps.build_info.outputs.build_type == 'apk-release'
+        working-directory: android
         run: |
-          echo "=== Build via flutter CLI (with symlink) ==="
-          flutter build apk --release \
-            --target-platform android-arm,android-arm64
+          echo "=== Build via Gradle langsung (bypass Flutter CLI) ==="
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
           
           echo ""
           echo "=== Cek APK ==="
-          ls -lh build/app/outputs/flutter-apk/app-release.apk 2>/dev/null || echo "Tidak ada di build/"
-          ls -lh android/app/build/outputs/flutter-apk/app-release.apk 2>/dev/null || echo "Tidak ada di android/"
+          find app/build/outputs -name "*.apk" -type f
+          
+          echo ""
+          echo "=== File size ==="
+          ls -lh app/build/outputs/apk/release/*.apk 2>/dev/null || echo "Tidak ada di release/"
+          ls -lh app/build/outputs/flutter-apk/*.apk 2>/dev/null || echo "Tidak ada di flutter-apk/"
 
       - name: Build AAB Release
         if: steps.build_info.outputs.build_type == 'aab-release'
+        working-directory: android
         run: |
-          flutter build appbundle --release \
-            --target-platform android-arm,android-arm64
-          echo "AAB Release selesai"
+          chmod +x gradlew
+          ./gradlew bundleRelease --no-daemon
+          
+          echo ""
+          echo "=== Cek AAB ==="
+          find app/build/outputs -name "*.aab" -type f
 
+      # ============================================
+      # ✅ FIX: Path copy APK — cari di android/app/build/outputs/
+      # ============================================
       - name: Prepare Output Files
         run: |
           mkdir -p output
@@ -615,27 +656,31 @@ jobs:
           TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
           APP_NAME=$(grep '^name:' pubspec.yaml | awk '{print $2}' | tr -d '\r')
 
-          echo "=== Cari APK di semua lokasi ==="
+          echo "=== Cari file build di semua lokasi ==="
           find . -name "*.apk" -type f 2>/dev/null | grep -v "/output/" || echo "Tidak ada APK"
+          find . -name "*.aab" -type f 2>/dev/null | grep -v "/output/" || echo "Tidak ada AAB"
 
           if [ "$BUILD_TYPE" = "apk-debug" ]; then
-            APK_PATH=$(find android/app/build/outputs/flutter-apk -name "*.apk" | head -1)
+            APK_PATH=$(find android/app/build/outputs/apk/debug -name "*.apk" | head -1)
             if [ -z "$APK_PATH" ]; then
-              APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" | head -1)
+              APK_PATH=$(find android/app/build/outputs/flutter-apk -name "*.apk" | head -1)
             fi
+            echo "APK yang akan di-copy: $APK_PATH"
             cp "$APK_PATH" "output/${APP_NAME}_debug_${TIMESTAMP}.apk"
           elif [ "$BUILD_TYPE" = "apk-release" ]; then
-            APK_PATH=$(find android/app/build/outputs/flutter-apk -name "app-release.apk" | head -1)
+            # Prioritas: apk/release/ (dari gradlew), lalu flutter-apk/ (fallback)
+            APK_PATH=$(find android/app/build/outputs/apk/release -name "app-release.apk" | head -1)
             if [ -z "$APK_PATH" ]; then
-              APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+              APK_PATH=$(find android/app/build/outputs/flutter-apk -name "app-release.apk" | head -1)
             fi
             if [ -z "$APK_PATH" ]; then
-              APK_PATH=$(find build/app/outputs/flutter-apk -name "app-release.apk" | head -1)
+              APK_PATH=$(find android/app/build/outputs -name "*.apk" | head -1)
             fi
             echo "APK yang akan di-copy: $APK_PATH"
             cp "$APK_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.apk"
           elif [ "$BUILD_TYPE" = "aab-release" ]; then
             AAB_PATH=$(find android/app/build/outputs/bundle/release -name "*.aab" | head -1)
+            echo "AAB yang akan di-copy: $AAB_PATH"
             cp "$AAB_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.aab"
           fi
 
