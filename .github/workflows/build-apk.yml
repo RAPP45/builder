@@ -596,19 +596,15 @@ jobs:
             echo "✅ gradlew downloaded dari Gradle GitHub"
           fi
           
-          # ✅ FIX KRITIS: Paksa gradle-wrapper.properties ke 8.11.1
-          # File default dari Gradle GitHub tag v8.11.1 masih mengarah ke 8.11 (bug di repo Gradle)
-          echo ""
+          # ✅ FIX KRITIS: Tulis ulang gradle-wrapper.properties pakai echo (anti error spasi YAML)
           echo "=== Paksa gradle-wrapper.properties ke 8.11.1 ==="
-          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-all.zip
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
-EOF
+          echo "distributionBase=GRADLE_USER_HOME" > gradle/wrapper/gradle-wrapper.properties
+          echo "distributionPath=wrapper/dists" >> gradle/wrapper/gradle-wrapper.properties
+          echo "distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-all.zip" >> gradle/wrapper/gradle-wrapper.properties
+          echo "zipStoreBase=GRADLE_USER_HOME" >> gradle/wrapper/gradle-wrapper.properties
+          echo "zipStorePath=wrapper/dists" >> gradle/wrapper/gradle-wrapper.properties
           
-          echo "✅ gradle-wrapper.properties dipaksa ke 8.11.1-all.zip"
+          echo "✅ gradle-wrapper.properties dipaksa ke 8.11.1"
           echo ""
           echo "=== Isi gradle-wrapper.properties ==="
           cat gradle/wrapper/gradle-wrapper.properties
